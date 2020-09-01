@@ -10,12 +10,12 @@ import (
 	"github.com/sokool/wpf/internal/platform/log"
 )
 
-func NewManager(options ...Option) *Fetchers {
-	f := &Fetchers{
-		log:      log.NewLogger(os.Stdout),
+func NewManager(shutdown context.Context, options ...Option) *Manager {
+	f := &Manager{
+		logger:   log.NewLogger(os.Stdout),
 		urls:     Memory,
 		readers:  map[string]*Reader{},
-		shutdown: context.Background(),
+		shutdown: shutdown,
 	}
 
 	for i := range options {
@@ -25,15 +25,15 @@ func NewManager(options ...Option) *Fetchers {
 	return f
 }
 
-type Fetchers struct {
+type Manager struct {
 	mu       sync.Mutex
-	log      log.Logger
 	urls     Storage
+	logger   log.Logger
 	readers  map[string]*Reader
 	shutdown context.Context
 }
 
-func (m *Fetchers) Fetch(u *URL) error {
+func (m *Manager) Fetch(u *URL) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -41,21 +41,17 @@ func (m *Fetchers) Fetch(u *URL) error {
 		return err
 	}
 
-	return m.read(*u)
+	return m.fetch(*u)
 }
 
-func (m *Fetchers) Get(id int) (URL, error) {
-	return m.urls.Get(id)
-}
-
-func (m *Fetchers) Remove(id int) error {
+func (m *Manager) Remove(id int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	var u URL
 	var err error
 
-	if u, err = m.urls.Get(id); err != nil {
+	if u, err = m.urls.One(id); err != nil {
 		return err
 	}
 
@@ -66,11 +62,11 @@ func (m *Fetchers) Remove(id int) error {
 	return m.urls.Remove(u.ID)
 }
 
-func (m *Fetchers) Pause(id int) error {
+func (m *Manager) Pause(id int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	u, err := m.urls.Get(id)
+	u, err := m.urls.One(id)
 	if err != nil {
 		return err
 	}
@@ -78,19 +74,23 @@ func (m *Fetchers) Pause(id int) error {
 	return m.stop(u)
 }
 
-func (m *Fetchers) Resume(id int) error {
+func (m *Manager) Resume(id int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	u, err := m.urls.Get(id)
+	u, err := m.urls.One(id)
 	if err != nil {
 		return err
 	}
 
-	return m.read(u)
+	return m.fetch(u)
 }
 
-func (m *Fetchers) read(u URL) error {
+func (m *Manager) One(id int) (URL, error) { return m.urls.One(id) }
+
+func (m *Manager) All() ([]URL, error) { return m.urls.All() }
+
+func (m *Manager) fetch(u URL) error {
 	if _, ok := m.readers[u.Resource]; ok {
 		return fmt.Errorf("%s already fetching", u.Resource)
 	}
@@ -99,14 +99,14 @@ func (m *Fetchers) read(u URL) error {
 		ReaderShutdown(m.shutdown),
 		ReaderInterval(u.Interval),
 		ReaderTimeout(time.Second*5),
-		ReaderLogger(m.log.Tag(u.String())),
+		ReaderLogger(m.logger.Tag(u.String())),
 		ReaderStorage(func(r Response) error { return m.urls.Append(u.ID, r) }),
 	)
 
 	return nil
 }
 
-func (m *Fetchers) stop(u URL) error {
+func (m *Manager) stop(u URL) error {
 	if r, reading := m.readers[u.Resource]; reading {
 		if err := r.Close(); err != nil {
 			return err
@@ -118,16 +118,12 @@ func (m *Fetchers) stop(u URL) error {
 	return nil
 }
 
-type Option func(*Fetchers)
+type Option func(*Manager)
 
 func WithLogger(l log.Logger) Option {
-	return func(f *Fetchers) { f.log = l }
+	return func(f *Manager) { f.logger = l }
 }
 
 func WithStorage(s Storage) Option {
-	return func(f *Fetchers) { f.urls = s }
-}
-
-func WithShutdown(c context.Context) Option {
-	return func(f *Fetchers) { f.shutdown = c }
+	return func(f *Manager) { f.urls = s }
 }

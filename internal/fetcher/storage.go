@@ -11,7 +11,8 @@ import (
 var Memory Storage = &memory{urls: map[int]*URL{}, unique: map[string]int{}}
 
 type Storage interface {
-	Get(id int) (URL, error)
+	One(id int) (URL, error)
+	All() ([]URL, error)
 	Store(u *URL) error
 	Append(id int, r Response) error
 	Remove(id int) error
@@ -22,6 +23,16 @@ type URL struct {
 	Resource string
 	Interval time.Duration
 	History  []Response
+}
+
+func (u URL) MarshalJSON() ([]byte, error) {
+	type jsn struct {
+		ID       int    `json:"id"`
+		URL      string `json:"url"`
+		Interval int    `json:"interval"`
+	}
+
+	return json.Marshal(jsn{u.ID, u.Resource, int(u.Interval / time.Second)})
 }
 
 func (u URL) String() string { return fmt.Sprintf("#%d:%s", u.ID, u.Resource) }
@@ -57,7 +68,7 @@ type memory struct {
 	id     int
 }
 
-func (m *memory) Get(id int) (URL, error) {
+func (m *memory) One(id int) (URL, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -67,6 +78,14 @@ func (m *memory) Get(id int) (URL, error) {
 	}
 
 	return *u, nil
+}
+
+func (m *memory) All() ([]URL, error) {
+	var uu []URL
+	for i := range m.urls {
+		uu = append(uu, *m.urls[i])
+	}
+	return uu, nil
 }
 
 func (m *memory) Store(u *URL) error {
